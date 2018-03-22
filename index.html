@@ -1,0 +1,304 @@
+<html>
+  <head>
+    <title>XOR Image splitter/combiner</title>
+    <style>
+      body {
+        position: relative;
+      }
+
+      .wip.visible {
+        position: absolute;
+        height: 100%;
+        width: 100%;
+
+        top: 0px;
+        left: 0px;
+
+        border-radius: 10px;
+        border: 10px dashed rgba(255, 255, 255, .5);
+
+        box-sizing: border-box;
+
+        background-color: rgba(46, 46, 46, 0.98);
+        color: white;
+      }
+
+      .wip.hidden {
+        display: none;
+      }
+
+      .wip .content {
+        position: relative;
+        display: inline-block;
+        line-height: 0;
+
+        top: 50%;
+        left: 50%;
+        transform: translateX(-50%) translateY(-50%);
+      }
+
+      .page {
+        position: relative;
+        display: flex;
+        flex-direction: row;
+        height: 100%;
+      }
+
+      .select-container {
+        display: flex;
+        flex-direction: column;
+        flex: 2;
+      }
+
+      .preview-container {
+        margin: 10px;
+        flex: 1;
+        background-color: lightblue;
+        border-radius: 10px;
+        border: 10px dashed rgba(255, 255, 255, .5);
+        cursor: pointer;
+      }
+
+      .preview-container.dark {
+        background-color: gray;
+      }
+
+      .preview-container .center {
+        display: inline-block;
+        line-height: 0.5em;
+        position: relative;
+        top: 50%;
+        left: 50%;
+        transform: translateX(-50%) translateY(-50%);
+      }
+
+      .preview-container .inline {
+        text-align: center;
+      }
+
+      .select {
+        border-radius: 10px;
+        border: 10px dashed rgba(255, 255, 255, .5);
+        flex: 1;
+        margin: 10px;
+        cursor: pointer;
+      }
+
+      .select div {
+        display: inline-block;
+        position: relative;
+        top: 50%;
+        left: 50%;
+        transform: translateX(-50%) translateY(-50%);
+      }
+
+      .red {
+        background-color: darkred;
+        color: white;
+      }
+
+      .red:hover {
+        background-color: red;
+      }
+
+      .green {
+        background-color: darkgreen;
+      }
+
+      .green:hover {
+        background-color: green;
+      }
+    </style>
+    <script>
+      function createCanvas(width, height) {
+        let canvas = document.createElement('canvas');
+        [canvas.width, canvas.height] = [width, height];
+        return canvas;
+      }
+
+      let immediate = () => new Promise(resolve => setTimeout(resolve, 0));
+
+      function pReadAsObjectURL(file) {
+        return URL.createObjectURL(file);
+      }
+
+      async function getImage(imageFile) {
+        let data = pReadAsObjectURL(imageFile);
+        let img = new Image();
+        let imgLoadPromise = new Promise((resolve, reject) => {
+          img.addEventListener('load', resolve, true);
+        });
+        img.src = data;
+        await imgLoadPromise;
+
+        URL.revokeObjectURL(data);
+        return img;
+      }
+
+      function getImageData(image) {
+        let cnv = createCanvas(image.naturalWidth, image.naturalHeight);
+        let context = cnv.getContext('2d');
+
+        context.drawImage(image, 0, 0);
+        return context.getImageData(0, 0, cnv.width, cnv.height);
+      }
+
+      async function mapImageData(func, ...parts) {
+        if (parts.length === 0) throw new Error('At least one image should be specified');
+        parts.reduce((acc, item) => {
+          if (item.width !== acc.width || item.height !== acc.height) throw new Error('Image dimensions must match');
+          return item;
+        });
+
+        let result = new ImageData(parts[0].width, parts[0].height);
+        for (let index = 0; index < result.data.length; ++index) {
+          if (index % 200000 === 0) await immediate();
+          result.data[index] = func(index, ...parts.map(part => part.data[index]));
+        }
+
+        return result;
+      }
+
+      function createMask(imageData) {
+        return mapImageData(
+          (index, u) => index % 4 === 3 ? 255 : Math.trunc(Math.random() * 256),
+          imageData
+        );
+      }
+
+      async function saveImageData(data) {
+        let cnv = createCanvas(data.width, data.height);
+        let context = cnv.getContext('2d');
+        
+        context.putImageData(data, 0, 0);
+        let blob = await new Promise(resolve => cnv.toBlob(resolve));
+        return blob;
+      }
+
+      function saveFile(blob, name) {
+        let uri = URL.createObjectURL(blob);
+        
+        let link = document.createElement('a');
+        link.href = uri;
+        link.download = name;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(uri);
+      }
+
+      async function handleEncodeImage(event) {
+        if (!event.target.files.length) return;
+        if (event.target.files.length !== 1) throw new Error('You should select only one file');
+
+        showWIP();
+
+        let image = await getImage(event.target.files[0]);
+
+        let imageData = getImageData  (image);
+        let mask      = await createMask(imageData);
+        let result    = await mapImageData(((index, u, v) => ((index % 4) !== 3) ? u ^ v : u), imageData, mask);
+
+        let parts = await Promise.all([saveImageData(mask), saveImageData(result)]);
+        
+        let fname = event.target.files[0].name;
+        saveFiles(parts.map((part, index) => [part, `${fname}-part${index}.png`]));
+        hideWIP();
+      }
+
+      async function handleDecodeImage(event) {
+        if (!event.target.files.length) return;
+        if (event.target.files.length !== 2) throw new Error('You should select two files');
+
+        showWIP();
+        let images = await Promise.all([...event.target.files].map(file => getImage(file)));
+        let parts  = await Promise.all(images.map(image => getImageData(image)));
+
+        let result = await mapImageData((index, u, v) => ((index % 4 !== 3) ? u ^ v : u), ...parts);
+        let combined = await saveImageData(result);
+
+        let fname = event.target.files[0].name + '-combined.png';
+        saveFiles([[combined, fname]]);
+        hideWIP();
+      }
+
+      function saveFiles(files = []) {
+        let block = document.querySelector('#download');
+        let header = block.querySelector('h1');
+
+        header.childNodes.forEach(child => header.removeChild(child));
+        header.appendChild(
+          document.createTextNode(
+            `Download ${files.length} files`
+          )
+        );
+
+        if (files.length) {
+          block.className = "preview-container ";
+        } else {
+          block.className = "preview-container dark";
+        }
+
+        block.onclick = () => {
+          files.forEach(([data, name]) => saveFile(data, name));
+          saveFiles();
+        }
+      }
+
+      let catcher = (func, handler) => async (...args) => {
+        try {
+          await func(...args);
+        } catch (error) {
+          handler(error.message);
+        }
+      };
+
+      function showError(error) {
+        hideWIP();
+        alert(error.message);
+      }
+
+      function hideWIP() {
+        document.body.querySelector('#wip').className = 'wip hidden';
+      }
+
+      function showWIP() {
+        document.body.querySelector('#wip').className = 'wip visible';
+      }
+    </script>
+  </head>
+  <body>
+    <input style="display: none" type="file" accept="image/*" id="fhandler" />
+    <input style="display: none" type="file" accept="image/*" id="dfhandler" multiple />
+
+    <div class="page">
+      <div class="select-container">
+        <div id="select-split" class="select red">
+          <div><h1>Select 1 file to split</h1></div>
+        </div>
+        <div id="select-combine" class="select green">
+          <div><h1>Select 2 files to combine</h1></div>
+        </div>
+      </div>
+      <div id="download" class="preview-container">
+        <div class="center">
+          <h1></h1>
+        </div>
+      </div>
+    </div>
+    <div class="wip hidden" id="wip">
+      <div class="content">
+        <h1>WORK IN PROGRESS</h1>
+      </div>
+    </div>
+    <script>
+      document.querySelector('#fhandler').addEventListener('change', catcher(handleEncodeImage, showError), true);
+      document.querySelector('#dfhandler').addEventListener('change', catcher(handleDecodeImage, showError), true);
+
+      document.querySelector('#select-split').addEventListener('click', () => document.querySelector('#fhandler').click(), true);
+      document.querySelector('#select-combine').addEventListener('click', () => document.querySelector('#dfhandler').click(), true);
+
+      saveFiles();
+    </script>
+  </body>
+</html>
