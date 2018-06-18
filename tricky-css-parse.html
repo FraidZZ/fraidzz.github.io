@@ -232,10 +232,11 @@ code {
   
   const frame = document.createElement('iframe');
   frame.style.display = 'none';
+  let promiseFrameLoad = pWaitEvent(frame, "load");
   frame.src = 'about:blank';
   document.body.appendChild(frame);
   
-  await pWaitEvent(frame, 'load');
+  await promiseFrameLoad;
   
   const data = new Blob([code], { type: 'text/css'});
   const objectURL = URL.createObjectURL(data);
@@ -243,11 +244,12 @@ code {
   let head = frame.contentDocument.head;
   
   const style = frame.contentDocument.createElement('link');
+  let promiseStyleLoad = pWaitEvent(style, "load");
   style.href = objectURL;
   style.rel  = 'stylesheet';
   
   head.appendChild(style);
-  await pWaitEvent(style, 'load');
+  await promiseStyleLoad;
   
   const result = [...frame.contentDocument.styleSheets].find(sheet =&gt; sheet.href === objectURL);
   
